@@ -1,7 +1,12 @@
 const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
-// const wifi = require('node-wifi');
 const { exec } = require('child_process');
+const wifi = require('node-wifi');
+
+// Khởi tạo node-wifi (chỉ dùng trên Windows/Linux)
+wifi.init({
+    iface: null // Tự động nhận diện Network Interface mặc định
+});
 const axios = require('axios');
 const open = (...args) => import('open').then(({default: open}) => open(...args));
 
@@ -33,21 +38,40 @@ function createWindow() {
 ipcMain.handle('start-check-in', async () => {
     
     const getSsid = () => new Promise((resolve, reject) => {
-        // === LỆNH CUỐI CÙNG, ĐÁNG TIN CẬY NHẤT ===
-        const command = `system_profiler SPAirPortDataType | awk '/Current Network Information:/ { getline; sub(/^[ \t]*/, ""); sub(/:$/, ""); print; exit }'`;
-        // =======================================
+        const platform = process.platform;
 
-        exec(command, (error, stdout, stderr) => {
-            if (error) {
-                return reject(new Error(`Lỗi khi chạy system_profiler: ${stderr}`));
-            }
-            const ssid = stdout.trim();
-            if (ssid) {
-                resolve(ssid);
-            } else {
-                reject(new Error('Không thể lấy được SSID. Vui lòng đảm bảo bạn đang kết nối Wi-Fi.'));
-            }
-        });
+        if (platform === 'darwin') {
+            // ===== macOS: Dùng system_profiler (airport đã bị Apple xóa trên macOS Ventura/Sonoma) =====
+            const command = `system_profiler SPAirPortDataType | awk '/Current Network Information:/ { getline; sub(/^[ \\t]*/, ""); sub(/:$/, ""); print; exit }'`;
+            exec(command, (error, stdout, stderr) => {
+                if (error) {
+                    return reject(new Error(`Lỗi macOS system_profiler: ${stderr || error.message}`));
+                }
+                const ssid = stdout.trim();
+                if (ssid) {
+                    resolve(ssid);
+                } else {
+                    reject(new Error('Không lấy được SSID. Vui lòng đảm bảo đang kết nối Wi-Fi.'));
+                }
+            });
+        } else {
+            // ===== Windows / Linux: Dùng node-wifi =====
+            wifi.getCurrentConnections((error, currentConnections) => {
+                if (error) {
+                    return reject(new Error(`Lỗi khi lấy thông tin Wi-Fi: ${error.message}`));
+                }
+                if (currentConnections && currentConnections.length > 0) {
+                    const ssid = currentConnections[0].ssid || currentConnections[0].name;
+                    if (ssid) {
+                        resolve(ssid);
+                    } else {
+                        reject(new Error('Đang bắt được mạng nhưng không lấy được tên (SSID).'));
+                    }
+                } else {
+                    reject(new Error('Không tìm thấy kết nối Wi-Fi nào. Hãy kiểm tra lại kết nối mạng.'));
+                }
+            });
+        }
     });
 
     try {
